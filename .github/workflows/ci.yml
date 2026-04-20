@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Validate & Build
+    runs-on: self-hosted
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect package manager
+        id: pm
+        shell: bash
+        run: |
+          if [ ! -f package.json ]; then
+            echo "pm=none" >> "$GITHUB_OUTPUT"
+            echo "No package.json found — skipping."
+            exit 0
+          fi
+          if [ -f bun.lock ] || [ -f bun.lockb ]; then
+            echo "pm=bun" >> "$GITHUB_OUTPUT"
+          elif [ -f pnpm-lock.yaml ]; then
+            echo "pm=pnpm" >> "$GITHUB_OUTPUT"
+          elif [ -f yarn.lock ]; then
+            echo "pm=yarn" >> "$GITHUB_OUTPUT"
+          elif [ -f package-lock.json ]; then
+            echo "pm=npm" >> "$GITHUB_OUTPUT"
+          else
+            echo "pm=bun" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect scripts
+        id: scripts
+        if: steps.pm.outputs.pm != 'none'
+        shell: bash
+        run: |
+          HAS_VALIDATE=$(node -e "try{const p=require('./package.json');process.stdout.write(String(!!(p.scripts&&p.scripts.validate)))}catch{process.stdout.write('false')}")
+          HAS_BUILD=$(node -e "try{const p=require('./package.json');process.stdout.write(String(!!(p.scripts&&p.scripts.build)))}catch{process.stdout.write('false')}")
+          echo "has_validate=$HAS_VALIDATE" >> "$GITHUB_OUTPUT"
+          echo "has_build=$HAS_BUILD" >> "$GITHUB_OUTPUT"
+          echo "validate=$HAS_VALIDATE build=$HAS_BUILD"
+
+      - name: Setup Bun
+        if: steps.pm.outputs.pm == 'bun'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.7
+
+      - name: Setup Node
+        if: steps.pm.outputs.pm == 'pnpm' || steps.pm.outputs.pm == 'yarn' || steps.pm.outputs.pm == 'npm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        if: steps.pm.outputs.pm == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Install dependencies
+        if: steps.pm.outputs.pm != 'none'
+        shell: bash
+        run: |
+          case "${{ steps.pm.outputs.pm }}" in
+            bun)  bun install --frozen-lockfile ;;
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            npm)  npm ci ;;
+          esac
+
+      - name: Write .env from secret
+        if: steps.pm.outputs.pm != 'none'
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        shell: bash
+        run: |
+          if [ -n "$ENV_FILE" ]; then
+            printf '%s' "$ENV_FILE" > .env
+            echo ".env written ($(wc -l < .env) lines)."
+          else
+            echo "No ENV_FILE secret configured — skipping .env write."
+          fi
+
+      - name: Run validate
+        if: steps.scripts.outputs.has_validate == 'true'
+        shell: bash
+        run: |
+          case "${{ steps.pm.outputs.pm }}" in
+            bun)  bun run validate ;;
+            pnpm) pnpm run validate ;;
+            yarn) yarn validate ;;
+            npm)  npm run validate ;;
+          esac
+
+      - name: Run build
+        if: steps.scripts.outputs.has_build == 'true'
+        shell: bash
+        run: |
+          case "${{ steps.pm.outputs.pm }}" in
+            bun)  bun run build ;;
+            pnpm) pnpm run build ;;
+            yarn) yarn build ;;
+            npm)  npm run build ;;
+          esac
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "### CI Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Package manager: ${{ steps.pm.outputs.pm }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Validate ran: ${{ steps.scripts.outputs.has_validate }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Build ran: ${{ steps.scripts.outputs.has_build }}" >> "$GITHUB_STEP_SUMMARY"
