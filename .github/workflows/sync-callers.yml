@@ -1,0 +1,173 @@
+name: Sync Claude Caller Stubs
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6 hours
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/caller-templates/**"
+      - ".github/workflows/sync-callers.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-callers
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync caller stubs across org
+    runs-on: self-hosted
+    env:
+      ORG: Navibyte-Innovations-Pvt-Ltd
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      SYNC_BRANCH: chore/sync-claude-callers
+    steps:
+      - name: Checkout central repo
+        uses: actions/checkout@v4
+
+      - name: Verify caller templates exist
+        run: |
+          set -e
+          test -f .github/caller-templates/claude.yml || { echo "::error::missing caller-templates/claude.yml"; exit 1; }
+          test -f .github/caller-templates/claude-auto-fix.yml || { echo "::error::missing caller-templates/claude-auto-fix.yml"; exit 1; }
+
+      - name: List target repos
+        id: repos
+        run: |
+          # Non-archived, non-fork, non-.github repos in org
+          gh api "orgs/$ORG/repos?per_page=100&type=all" \
+            --paginate \
+            --jq '.[] | select(.archived == false and .fork == false and .name != ".github") | .name' \
+            > /tmp/repos.txt
+          echo "Targets:"
+          cat /tmp/repos.txt
+
+      - name: Sync each repo
+        run: |
+          set -u
+          FAILED=0
+          SYNCED=0
+          SKIPPED=0
+
+          sync_file() {
+            local repo="$1"
+            local path="$2"
+            local local_file="$3"
+            local msg="$4"
+
+            # Content base64
+            local content
+            content=$(base64 -w0 < "$local_file" 2>/dev/null || base64 -i "$local_file")
+
+            # Expected sha256 of new content
+            local new_hash
+            new_hash=$(sha256sum "$local_file" | awk '{print $1}')
+
+            # Current file sha + content
+            local current_sha current_content current_hash
+            current_sha=$(gh api "repos/$ORG/$repo/contents/$path" --jq '.sha' 2>/dev/null || echo "")
+            if [ -n "$current_sha" ] && [ "$current_sha" != "null" ]; then
+              current_content=$(gh api "repos/$ORG/$repo/contents/$path" --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
+              current_hash=$(echo -n "$current_content" | sha256sum | awk '{print $1}')
+              if [ "$current_hash" = "$new_hash" ]; then
+                echo "  SKIP $repo/$path (up to date)"
+                return 0
+              fi
+            fi
+
+            # Try direct push to main
+            local args=(--method PUT "repos/$ORG/$repo/contents/$path"
+              -f message="$msg"
+              -f content="$content"
+              -f branch="main")
+            if [ -n "$current_sha" ] && [ "$current_sha" != "null" ]; then
+              args+=(-f sha="$current_sha")
+            fi
+
+            if gh api "${args[@]}" --silent 2>/tmp/err; then
+              echo "  PUSHED $repo/$path"
+              return 0
+            fi
+
+            # On rule violation, fall back to PR branch
+            if grep -q "Repository rule violations" /tmp/err; then
+              echo "  BRANCH-PROTECTED $repo — using PR branch"
+              sync_via_pr "$repo" "$path" "$content" "$msg" "$current_sha"
+              return $?
+            fi
+
+            echo "::error::failed to push $repo/$path: $(cat /tmp/err)"
+            return 1
+          }
+
+          sync_via_pr() {
+            local repo="$1"
+            local path="$2"
+            local content="$3"
+            local msg="$4"
+            local current_sha="$5"
+
+            # Get main SHA
+            local main_sha
+            main_sha=$(gh api "repos/$ORG/$repo/git/ref/heads/main" --jq '.object.sha')
+
+            # Create or reset sync branch
+            if ! gh api --method POST "repos/$ORG/$repo/git/refs" \
+                 -f ref="refs/heads/$SYNC_BRANCH" -f sha="$main_sha" --silent 2>/dev/null; then
+              gh api --method PATCH "repos/$ORG/$repo/git/refs/heads/$SYNC_BRANCH" \
+                -f sha="$main_sha" -F force=true --silent
+            fi
+
+            # Get file sha on branch
+            local branch_sha
+            branch_sha=$(gh api "repos/$ORG/$repo/contents/$path?ref=$SYNC_BRANCH" --jq '.sha' 2>/dev/null || echo "")
+
+            local args=(--method PUT "repos/$ORG/$repo/contents/$path"
+              -f message="$msg"
+              -f content="$content"
+              -f branch="$SYNC_BRANCH")
+            if [ -n "$branch_sha" ] && [ "$branch_sha" != "null" ]; then
+              args+=(-f sha="$branch_sha")
+            fi
+
+            gh api "${args[@]}" --silent
+
+            # Open PR if none exists
+            local existing_pr
+            existing_pr=$(gh api "repos/$ORG/$repo/pulls?head=$ORG:$SYNC_BRANCH&state=open" --jq '.[0].number' 2>/dev/null || echo "")
+            if [ -z "$existing_pr" ] || [ "$existing_pr" = "null" ]; then
+              gh pr create --repo "$ORG/$repo" \
+                --base main --head "$SYNC_BRANCH" \
+                --title "chore: sync Claude caller stubs" \
+                --body "Automated sync from central \`.github\` repo. Keeps \`.github/workflows/claude.yml\` and \`.github/workflows/claude-auto-fix.yml\` aligned with the org reusable workflows." \
+                >/dev/null && echo "  PR opened in $repo"
+            else
+              echo "  PR #$existing_pr updated in $repo"
+            fi
+          }
+
+          while read -r repo; do
+            [ -z "$repo" ] && continue
+            echo "=== $repo ==="
+            if sync_file "$repo" ".github/workflows/claude.yml" ".github/caller-templates/claude.yml" \
+                 "ci(workflows): sync claude.yml caller from org template"; then
+              :
+            else
+              FAILED=$((FAILED+1))
+            fi
+            if sync_file "$repo" ".github/workflows/claude-auto-fix.yml" ".github/caller-templates/claude-auto-fix.yml" \
+                 "ci(workflows): sync claude-auto-fix.yml caller from org template"; then
+              :
+            else
+              FAILED=$((FAILED+1))
+            fi
+          done < /tmp/repos.txt
+
+          echo ""
+          echo "### Sync summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Failed writes: $FAILED" >> "$GITHUB_STEP_SUMMARY"
+          [ "$FAILED" -eq 0 ]
