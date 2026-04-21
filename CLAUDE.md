@@ -12,7 +12,6 @@ Central `.github` repo for **Navibyte-Innovations-Pvt-Ltd** GitHub org. Two jobs
 ```
 profile/README.md                              # org profile page content
 .github/workflows/
-  ci.yml                                       # reusable CI (auto-detect bun/pnpm/yarn/npm)
   claude-reusable.yml                          # reusable @claude mention handler
   claude-auto-fix-reusable.yml                 # reusable auto-fix on issue open
   sync-callers.yml                             # cron fan-out to org repos
@@ -57,7 +56,7 @@ No build / no tests — pure YAML + Markdown repo.
 4. Verify: `gh run list --workflow=sync-callers.yml --limit 1`.
 
 ### Change reusable workflow logic
-1. Edit `.github/workflows/claude-reusable.yml` / `claude-auto-fix-reusable.yml` / `ci.yml`.
+1. Edit `.github/workflows/claude-reusable.yml` / `claude-auto-fix-reusable.yml`.
 2. Commit + push `main` → all caller repos pick up next run (pinned to `@main`).
 
 ### Add new file to fan-out
