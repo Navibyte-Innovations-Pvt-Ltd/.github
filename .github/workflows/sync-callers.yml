@@ -111,15 +111,19 @@ jobs:
             local msg="$4"
             local current_sha="$5"
 
-            # Get main SHA
-            local main_sha
-            main_sha=$(gh api "repos/$ORG/$repo/git/ref/heads/main" --jq '.object.sha')
-
-            # Create or reset sync branch
-            if ! gh api --method POST "repos/$ORG/$repo/git/refs" \
-                 -f ref="refs/heads/$SYNC_BRANCH" -f sha="$main_sha" --silent 2>/dev/null; then
-              gh api --method PATCH "repos/$ORG/$repo/git/refs/heads/$SYNC_BRANCH" \
-                -f sha="$main_sha" -F force=true --silent
+            # Create sync branch off main ONCE per repo per run. Subsequent
+            # file syncs in the same run must append to the existing branch,
+            # not reset it — otherwise earlier file commits get wiped and
+            # only the last-synced file ships in the PR.
+            if [ -z "${BRANCH_READY_FOR_REPO:-}" ] || [ "$BRANCH_READY_FOR_REPO" != "$repo" ]; then
+              local main_sha
+              main_sha=$(gh api "repos/$ORG/$repo/git/ref/heads/main" --jq '.object.sha')
+              if ! gh api --method POST "repos/$ORG/$repo/git/refs" \
+                   -f ref="refs/heads/$SYNC_BRANCH" -f sha="$main_sha" --silent 2>/dev/null; then
+                gh api --method PATCH "repos/$ORG/$repo/git/refs/heads/$SYNC_BRANCH" \
+                  -f sha="$main_sha" -F force=true --silent
+              fi
+              BRANCH_READY_FOR_REPO="$repo"
             fi
 
             # Get file sha on branch
