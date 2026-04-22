@@ -63,20 +63,13 @@ jobs:
             local content
             content=$(base64 -w0 < "$local_file" 2>/dev/null || base64 -i "$local_file")
 
-            # Expected sha256 of new content
-            local new_hash
-            new_hash=$(sha256sum "$local_file" | awk '{print $1}')
-
-            # Current file sha + content
-            local current_sha current_content current_hash
+            # Compare git blob SHA (stable, byte-exact, no newline games)
+            local current_sha local_blob
             current_sha=$(gh api "repos/$ORG/$repo/contents/$path" --jq '.sha' 2>/dev/null || echo "")
-            if [ -n "$current_sha" ] && [ "$current_sha" != "null" ]; then
-              current_content=$(gh api "repos/$ORG/$repo/contents/$path" --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
-              current_hash=$(echo -n "$current_content" | sha256sum | awk '{print $1}')
-              if [ "$current_hash" = "$new_hash" ]; then
-                echo "  SKIP $repo/$path (up to date)"
-                return 0
-              fi
+            local_blob=$(git hash-object "$local_file")
+            if [ -n "$current_sha" ] && [ "$current_sha" = "$local_blob" ]; then
+              echo "  SKIP $repo/$path (up to date)"
+              return 0
             fi
 
             # Try direct push to main
