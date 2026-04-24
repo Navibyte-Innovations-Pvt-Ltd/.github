@@ -25,6 +25,7 @@ jobs:
         uses: WebNaresh/bun-setup-action@v1
         with:
           bun-version: "1.3.7"
+          frozen-lockfile: "false"
 
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
