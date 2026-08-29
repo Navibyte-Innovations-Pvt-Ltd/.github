@@ -8,6 +8,9 @@ on:
 
 jobs:
   auto-fix:
+    # Only trusted actors may burn the org's Claude subscription on a self-hosted runner.
+    # Public repos fire `issues: [opened]` for anyone; this is the gate.
+    if: contains(fromJSON('["WebNaresh", "glitchgrab-app[bot]"]'), github.actor)
     runs-on: self-hosted
     permissions:
       contents: write
