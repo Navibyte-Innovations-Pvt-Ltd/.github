@@ -31,8 +31,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # write, so a failed check can be re-run by the bot itself instead of
+          # being handed back as "please click re-run".
           additional_permissions: |
-            actions: read
+            actions: write
           claude_args: |
             --permission-mode acceptEdits
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebFetch"
@@ -51,5 +53,14 @@ jobs:
             7. NEVER run `gh pr merge` — the repo owner handles merging.
 
             If the task is on an existing PR (review/comment), push commits to that PR's branch directly; do not open a new PR.
+
+            Failing checks. When asked about failing checks, validation, CI, or "it is still failing", the task is done only when those checks are green — a diagnosis alone is not done, and "not caused by this PR" is not out of scope.
+            1. Read the failing job's log and artifacts and name the cause.
+            2. If the diff caused it, fix it on this branch.
+            3. If it is pre-existing or flaky, fix the root cause anyway — on this branch when small, otherwise open a separate PR and link it — and do not ask the user to re-run it.
+            4. Re-run only after naming a cause outside the diff (runner outage, network, a fix merged elsewhere): `gh run rerun <run-id> --failed`. Never re-run a failure you have not explained, and never re-run the same failure twice.
+            5. Watch the run (`gh run watch <run-id> --exit-status`) and report the result. If it is still red, go back to step 1 in the same run — do not stop and wait to be asked again.
+            6. If a re-run is refused ("Resource not accessible by integration"), say so in one line and keep going with the fix; the user clicking re-run is the last resort, never the plan.
+            The "cannot solve the task" escape below applies only to failing checks after the steps above were tried, and the comment must say what was tried.
 
             If you cannot solve the task (ambiguous, out of scope, requires human judgment, or you hit a blocker): post ONE comment on the issue/PR explaining why, and — only if the trigger is an issue — assign it to the repo owner with `gh issue edit ${{ github.event.issue.number }} --add-assignee ${{ github.repository_owner }}`. Do NOT open a PR.
