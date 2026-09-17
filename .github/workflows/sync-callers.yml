@@ -34,14 +34,19 @@ jobs:
           set -e
           test -f .github/caller-templates/claude.yml || { echo "::error::missing caller-templates/claude.yml"; exit 1; }
           test -f .github/caller-templates/claude-auto-fix.yml || { echo "::error::missing caller-templates/claude-auto-fix.yml"; exit 1; }
+          test -f .github/caller-templates/claude-ci-fix.yml || { echo "::error::missing caller-templates/claude-ci-fix.yml"; exit 1; }
 
       - name: List target repos
         id: repos
         run: |
-          # Non-archived, non-fork, non-.github repos in org
+          # Non-archived, non-fork, non-.github repos in org.
+          # practise_stack keeps its own callers: its claude.yml passes the Sonnet
+          # account's token (CLAUDE_SONNET_OAUTH_TOKEN), and it runs its own
+          # triage + Sonnet auto-fix instead of claude-auto-fix.yml. Syncing would
+          # swap the token and start two fixers on every new issue.
           gh api "orgs/$ORG/repos?per_page=100&type=all" \
             --paginate \
-            --jq '.[] | select(.archived == false and .fork == false and .name != ".github") | .name' \
+            --jq '.[] | select(.archived == false and .fork == false and .name != ".github" and .name != "practise_stack") | .name' \
             > /tmp/repos.txt
           echo "Targets:"
           cat /tmp/repos.txt
@@ -140,7 +145,7 @@ jobs:
               gh pr create --repo "$ORG/$repo" \
                 --base main --head "$SYNC_BRANCH" \
                 --title "chore: sync Claude caller stubs" \
-                --body "Automated sync from central \`.github\` repo. Keeps \`.github/workflows/claude.yml\` and \`.github/workflows/claude-auto-fix.yml\` aligned with the org reusable workflows." \
+                --body "Automated sync from central \`.github\` repo. Keeps \`.github/workflows/claude.yml\`, \`.github/workflows/claude-auto-fix.yml\` and \`.github/workflows/claude-ci-fix.yml\` aligned with the org reusable workflows." \
                 >/dev/null && echo "  PR opened in $repo"
             else
               echo "  PR #$existing_pr updated in $repo"
@@ -158,6 +163,12 @@ jobs:
             fi
             if sync_file "$repo" ".github/workflows/claude-auto-fix.yml" ".github/caller-templates/claude-auto-fix.yml" \
                  "ci(workflows): sync claude-auto-fix.yml caller from org template"; then
+              :
+            else
+              FAILED=$((FAILED+1))
+            fi
+            if sync_file "$repo" ".github/workflows/claude-ci-fix.yml" ".github/caller-templates/claude-ci-fix.yml" \
+                 "ci(workflows): sync claude-ci-fix.yml caller from org template"; then
               :
             else
               FAILED=$((FAILED+1))
