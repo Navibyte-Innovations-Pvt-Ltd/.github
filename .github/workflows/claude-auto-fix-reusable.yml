@@ -12,6 +12,11 @@ jobs:
     # Public repos fire `issues: [opened]` for anyone; this is the gate.
     if: contains(fromJSON('["WebNaresh", "glitchgrab-app[bot]"]'), github.actor)
     runs-on: self-hosted
+    # Same group as claude-ci-fix-reusable.yml (keyed by the branch this job
+    # pushes), so the CI-failure fixer waits while this job watches its own PR.
+    concurrency:
+      group: claude-branch-claude/issue-${{ github.event.issue.number }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
@@ -34,8 +39,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # write, so a check that failed for a reason outside the code can be
+          # re-run by the job itself (step 9).
           additional_permissions: |
-            actions: read
+            actions: write
           claude_args: |
             --permission-mode acceptEdits
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebFetch"
@@ -75,11 +82,12 @@ jobs:
             1. Investigate the issue. Read relevant code and confirm the bug before making changes.
             2. Create and switch to a new branch named `claude/issue-${{ github.event.issue.number }}` based on `main`.
             3. Implement the fix. Follow existing code style and patterns in the repo.
-            4. Run `bun run validate` and `bun run build` from the repo root. If anything fails, fix it before committing.
+            4. Run `bun run validate` and `bun run build` from the repo root. If anything fails, fix it before committing. These may not cover every CI job (end-to-end tests often run only in CI), so step 9 is not optional.
             5. Commit each changed file individually using conventional commit format (e.g. `fix(proposals): ...`). Do NOT add any Co-Authored-By or Claude attribution lines.
             6. Push the branch to origin.
             7. Open a pull request targeting `main` using `gh pr create`. Include the line `Closes #${{ github.event.issue.number }}` in the PR body so GitHub auto-closes the issue when the PR merges. Pass `--assignee` with the issue's assignees (comma-separated). If the issue has no assignees, use the issue author `${{ github.event.issue.user.login }}` as the assignee.
             8. Post a single comment on the issue linking to the new PR.
-            9. NEVER run `gh pr merge` — the repo owner handles merging.
+            9. Wait for the PR's checks: `gh pr checks <pr-number> --watch --interval 30`. A PR is done when its checks are green, not when it is opened. If one fails: read it (`gh run view <run-id> --log-failed`, `gh run download <run-id>`), name the cause, and fix it on this branch — including when the failure is pre-existing or flaky and not caused by your diff. Re-run (`gh run rerun <run-id> --failed`) only after naming a cause outside any code, never for a failure you have not explained. Push the fix and watch again. Each round that fixes or re-runs something posts ONE comment on the PR whose first line is exactly `<!-- claude-ci-fix sha=<the commit the failed run tested> -->`, then which check failed, the cause, and what changed. `claude-ci-fix-reusable.yml` counts those markers, so this job and that one share one budget of two rounds per PR. Before a round, count the markers already on the PR; at two, stop — the last comment must say what a human has to decide.
+            10. NEVER run `gh pr merge` — the repo owner handles merging.
 
             If at any point during the fix you discover the change is broader than the triage suggested (e.g. you need a schema change, a new dependency, or design decisions), STOP, discard the branch, post a comment on the issue explaining this needs human intervention, and assign the issue to the repo owner with `gh issue edit ${{ github.event.issue.number }} --add-assignee ${{ github.repository_owner }}`.
