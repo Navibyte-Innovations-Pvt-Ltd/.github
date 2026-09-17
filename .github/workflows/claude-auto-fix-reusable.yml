@@ -39,6 +39,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Glitchgrab files most issues, so the actor is its GitHub App. The
+          # action refuses bot actors unless listed — every Glitchgrab issue
+          # failed with "Workflow initiated by non-human actor".
+          allowed_bots: glitchgrab-app
           # write, so a check that failed for a reason outside the code can be
           # re-run by the job itself (step 9).
           additional_permissions: |
