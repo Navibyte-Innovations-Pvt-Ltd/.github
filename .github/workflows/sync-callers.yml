@@ -92,7 +92,10 @@ jobs:
             fi
 
             # On rule violation, fall back to PR branch
-            if grep -q "Repository rule violations" /tmp/err; then
+            # Rulesets say "Repository rule violations"; classic branch protection
+            # says "Changes must be made through a pull request" or names a
+            # required status check (HTTP 409). All three mean: open a PR.
+            if grep -qE "Repository rule violations|must be made through a pull request|Required status check" /tmp/err; then
               echo "  BRANCH-PROTECTED $repo — using PR branch"
               sync_via_pr "$repo" "$path" "$content" "$msg" "$current_sha"
               return $?
